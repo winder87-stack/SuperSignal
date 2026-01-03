@@ -20,6 +20,20 @@ export class FinancialMath {
   }
 
   /**
+   * Check if a is less than or equal to b
+   */
+  static lessThanOrEqual(a: Decimal | string | number, b: Decimal | string | number): boolean {
+    return FinancialMath.decimal(a).lte(FinancialMath.decimal(b));
+  }
+
+  /**
+   * Check if a is greater than or equal to b
+   */
+  static greaterThanOrEqual(a: Decimal | string | number, b: Decimal | string | number): boolean {
+    return FinancialMath.decimal(a).gte(FinancialMath.decimal(b));
+  }
+
+  /**
    * Safe addition
    */
   static add(a: Decimal | string | number, b: Decimal | string | number): Decimal {

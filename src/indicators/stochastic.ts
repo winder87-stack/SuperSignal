@@ -1,10 +1,6 @@
-// Stochastic Oscillator Implementation
-// Formula: %K = 100 * (Close - LowestLow) / (HighestHigh - LowestLow)
-// %D = SMA of %K over D period
-
 import { Decimal } from 'decimal.js';
-import { FinancialMath } from '../utils/math';
-import { Candle, StochasticValue, StochasticConfig } from '../types';
+import { FinancialMath } from '../utils/math.js';
+import { Candle, StochasticValue, StochasticConfig } from '../types/index.js';
 
 export class StochasticOscillator {
   private kPeriod: number;
@@ -83,8 +79,9 @@ export class StochasticOscillator {
 
   /**
    * Calculate stochastic value for current candles
+   * Uses internal state or provided context for %D SMA.
    */
-  public calculate(candles: Candle[]): StochasticValue | null {
+  public calculate(candles: Candle[], kHistory: Decimal[]): StochasticValue | null {
     if (candles.length < this.kPeriod) {
       return null;
     }
@@ -94,10 +91,12 @@ export class StochasticOscillator {
       return null;
     }
 
-    // For %D, we need historical %K values
-    // In a real implementation, we'd maintain a buffer of previous %K values
-    // For now, we'll approximate %D as current %K (this is common for the first calculation)
-    const dValue = kValue; // TODO: Implement proper %D calculation with historical buffer
+    // %D is the SMA of %K values
+    let dValue = kValue;
+    if (kHistory.length >= this.dPeriod) {
+      const dSum = kHistory.slice(-this.dPeriod).reduce((acc, val) => FinancialMath.add(acc, val), new Decimal(0));
+      dValue = FinancialMath.divide(dSum, this.dPeriod);
+    }
 
     return {
       k: kValue,
@@ -211,6 +210,14 @@ export class StochasticManager {
   private slowKHistory: Decimal[] = [];
   private trendKHistory: Decimal[] = [];
 
+  // Historical buffers for Strategy (Divergence/Rotation)
+  // Store last 100 candles worth of values
+  private fastHistory: StochasticValue[] = [];
+  private mediumHistory: StochasticValue[] = [];
+  private slowHistory: StochasticValue[] = [];
+  private trendHistory: StochasticValue[] = [];
+  private readonly MAX_HISTORY = 100;
+
   constructor() {
     this.fast = StochasticFactory.createFast();
     this.medium = StochasticFactory.createMedium();
@@ -227,64 +234,52 @@ export class StochasticManager {
     slow: StochasticValue | null;
     trend: StochasticValue | null;
   } {
-    const fastValue = this.fast.calculate(candles);
-    const mediumValue = this.medium.calculate(candles);
-    const slowValue = this.slow.calculate(candles);
-    const trendValue = this.trend.calculate(candles);
+    // We calculate %K first to update the history for %D SMA
+    const fastK = this.fast['calculateK'](candles);
+    const mediumK = this.medium['calculateK'](candles);
+    const slowK = this.slow['calculateK'](candles);
+    const trendK = this.trend['calculateK'](candles);
 
-    // Update historical buffers for %D calculation
+    if (fastK) {
+      this.fastKHistory.push(fastK);
+      if (this.fastKHistory.length > this.MAX_HISTORY) this.fastKHistory.shift();
+    }
+    if (mediumK) {
+      this.mediumKHistory.push(mediumK);
+      if (this.mediumKHistory.length > this.MAX_HISTORY) this.mediumKHistory.shift();
+    }
+    if (slowK) {
+      this.slowKHistory.push(slowK);
+      if (this.slowKHistory.length > this.MAX_HISTORY) this.slowKHistory.shift();
+    }
+    if (trendK) {
+      this.trendKHistory.push(trendK);
+      if (this.trendKHistory.length > this.MAX_HISTORY) this.trendKHistory.shift();
+    }
+
+    const fastValue = this.fast.calculate(candles, this.fastKHistory);
+    const mediumValue = this.medium.calculate(candles, this.mediumKHistory);
+    const slowValue = this.slow.calculate(candles, this.slowKHistory);
+    const trendValue = this.trend.calculate(candles, this.trendKHistory);
+
+
+
+    // Store completed values in history
     if (fastValue) {
-      this.fastKHistory.push(fastValue.k);
-      // Keep only last 10 values for %D calculation
-      if (this.fastKHistory.length > 10) {
-        this.fastKHistory.shift();
-      }
+      this.fastHistory.push(fastValue);
+      if (this.fastHistory.length > this.MAX_HISTORY) this.fastHistory.shift();
     }
-
     if (mediumValue) {
-      this.mediumKHistory.push(mediumValue.k);
-      if (this.mediumKHistory.length > 10) {
-        this.mediumKHistory.shift();
-      }
+      this.mediumHistory.push(mediumValue);
+      if (this.mediumHistory.length > this.MAX_HISTORY) this.mediumHistory.shift();
     }
-
     if (slowValue) {
-      this.slowKHistory.push(slowValue.k);
-      if (this.slowKHistory.length > 10) {
-        this.slowKHistory.shift();
-      }
+      this.slowHistory.push(slowValue);
+      if (this.slowHistory.length > this.MAX_HISTORY) this.slowHistory.shift();
     }
-
     if (trendValue) {
-      this.trendKHistory.push(trendValue.k);
-      if (this.trendKHistory.length > 10) {
-        this.trendKHistory.shift();
-      }
-    }
-
-    // Recalculate %D values with proper historical data
-    if (fastValue && this.fastKHistory.length >= 3) {
-      const dValues = this.fastKHistory.slice(-3);
-      const sum = dValues.reduce((acc, val) => FinancialMath.add(acc, val), new Decimal(0));
-      fastValue.d = FinancialMath.divide(sum, 3);
-    }
-
-    if (mediumValue && this.mediumKHistory.length >= 3) {
-      const dValues = this.mediumKHistory.slice(-3);
-      const sum = dValues.reduce((acc, val) => FinancialMath.add(acc, val), new Decimal(0));
-      mediumValue.d = FinancialMath.divide(sum, 3);
-    }
-
-    if (slowValue && this.slowKHistory.length >= 4) {
-      const dValues = this.slowKHistory.slice(-4);
-      const sum = dValues.reduce((acc, val) => FinancialMath.add(acc, val), new Decimal(0));
-      slowValue.d = FinancialMath.divide(sum, 4);
-    }
-
-    if (trendValue && this.trendKHistory.length >= 10) {
-      const dValues = this.trendKHistory.slice(-10);
-      const sum = dValues.reduce((acc, val) => FinancialMath.add(acc, val), new Decimal(0));
-      trendValue.d = FinancialMath.divide(sum, 10);
+      this.trendHistory.push(trendValue);
+      if (this.trendHistory.length > this.MAX_HISTORY) this.trendHistory.shift();
     }
 
     return {
@@ -341,5 +336,17 @@ export class StochasticManager {
       slow: this.slow,
       trend: this.trend
     };
+  }
+
+  /**
+   * Get historical values for a specific stochastic type
+   */
+  public getHistory(type: 'fast' | 'medium' | 'slow' | 'trend'): StochasticValue[] {
+    switch (type) {
+      case 'fast': return this.fastHistory;
+      case 'medium': return this.mediumHistory;
+      case 'slow': return this.slowHistory;
+      case 'trend': return this.trendHistory;
+    }
   }
 }

@@ -2,15 +2,13 @@
 
 import { Decimal } from 'decimal.js';
 
-// Trading Pairs (10x leverage)
+// Trading Pairs (minimum 10x leverage perpetuals)
 export const TRADING_PAIRS = [
-  'ETH-USDC',
-  'BTC-USDC',
-  'HYPE-USDC',
   'SOL-USDC',
-  'FARTCOIN-USDC',
-  'BNB-USDC',
-  'DOGE-USDC'
+  'AAVE-USDC',
+  'BSV-USDC',
+  'ZRO-USDC',
+  'TAO-USDC'
 ] as const;
 
 export type TradingPair = typeof TRADING_PAIRS[number];
@@ -81,10 +79,12 @@ export interface SignalComponents {
 export interface TradingSignal {
   pair: TradingPair;
   direction: SignalDirection;
-  strength: number; // 0-1 confidence score
+  strength: Decimal; // 0-1 confidence score
   components: SignalComponents;
   timestamp: number;
   price: Decimal;
+  stopLoss?: Decimal; // Recommended stop loss
+  type: 'entry' | 'exit' | 'neutral';
 }
 
 // Position Types
@@ -94,6 +94,10 @@ export interface Position {
   size: Decimal;
   entryPrice: Decimal;
   stopLoss: Decimal;
+  stopLossOrderId?: number; // Order ID for the stop loss order (for cancellation)
+  takeProfit?: Decimal; // Take profit price for bracket orders
+  trailingStop?: Decimal; // Current trailing stop price
+  trailingStopActivated?: boolean; // Whether trailing stop has been activated
   timestamp: number;
   signalId: string;
 }
@@ -124,16 +128,17 @@ export interface ApiResponse<T> {
 export interface RiskConfig {
   maxPositionSize: Decimal; // Max size per position
   maxTotalExposure: Decimal; // Max total exposure across all positions
-  stopLossPercentage: number; // Stop loss as percentage (e.g., 0.02 for 2%)
-  maxDrawdown: number; // Max drawdown before halting
+  stopLossPercentage: Decimal; // Stop loss as percentage (e.g., 0.02 for 2%)
+  maxDrawdown: Decimal; // Max drawdown before halting
+  riskPercentage: Decimal; // Percentage of account to risk per trade (e.g., 0.01 for 1%)
 }
 
 // Performance Metrics
 export interface PerformanceMetrics {
   totalPnL: Decimal;
-  winRate: number;
-  profitFactor: number;
-  maxDrawdown: number;
+  winRate: Decimal;
+  profitFactor: Decimal;
+  maxDrawdown: Decimal;
   totalTrades: number;
   winningTrades: number;
   losingTrades: number;

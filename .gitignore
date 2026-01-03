@@ -1,5 +1,41 @@
+# Dependencies
 node_modules/
+
+# Build output
 dist/
+
+# Environment variables
 .env
+.env.local
+.env.*.local
+
+# Logs
 *.log
 logs/
+
+# IDE and Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test coverage
+coverage/
+
+# Agent/AI assistants
+.agent/
+.roo/
+.roomodes
+.cursorrules
+CLAUDE.md
+
+# Data files (may contain sensitive info)
+data/
+
+# Auto Claude data directory
+.auto-claude/

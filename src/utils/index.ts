@@ -1,3 +1,3 @@
 // Utility exports
-export * from './math';
-export * from './logger';
+export * from './math.js';
+export * from './logger.js';

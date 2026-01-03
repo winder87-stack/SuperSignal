@@ -8,9 +8,9 @@ A sophisticated trading bot implementing the Super Signal strategy for Hyperliqu
 - **4 Stochastic Oscillators**: Fast (K9/D3), Medium (K14/D3), Slow (K40/D4), Trend (K60/D10)
 - **Financial Precision**: All calculations use decimal.js for accurate money handling
 - **Risk Management**: Built-in stop-loss and position sizing
-- **Multi-Pair Support**: ETH, BTC, HYPE, SOL, FARTCOIN, BNB, DOGE vs USDC (10x leverage)
+- **Multi-Pair Support**: ETH, BTC, HYPE, SOL, FARTCOIN, BNB, DOGE vs USDC (≥10x leverage)
 
-## Trading Pairs (10x)
+## Trading Pairs (≥10x leverage)
 
 - ETH-USDC
 - BTC-USDC
@@ -79,11 +79,22 @@ npm test
 src/
 ├── types/          # TypeScript type definitions
 ├── utils/          # Financial math and logging utilities
-├── indicators/     # Stochastic oscillator implementations
-├── strategy/       # Super Signal strategy logic
-├── api/           # Hyperliquid API clients (TODO)
-├── trading/       # Trading engine and order management (TODO)
-└── index.ts       # Main bot entry point
+├── indicators/     # Stochastic oscillator and pivot implementations
+├── strategies/     # Super Signal strategy logic
+├── core/           # Trading engine
+├── exchange/       # Hyperliquid API clients and WebSocket
+│   └── hyperliquid/
+├── trading/        # Order book management and analysis
+│   └── order-book/
+├── risk/           # Risk management
+└── index.ts        # Main bot entry point
+
+tests/
+├── unit/           # Unit tests
+└── integration/    # Integration tests
+
+scripts/            # Utility scripts
+plans/              # Strategy and architecture documentation
 ```
 
 ## Safety Rules (Non-negotiable)
@@ -107,10 +118,14 @@ src/
 - ✅ Project structure and types
 - ✅ Financial math utilities (decimal.js)
 - ✅ Stochastic oscillator indicators
+- ✅ Pivot detection (support/resistance)
 - ✅ Super Signal strategy framework
-- 🔄 Hyperliquid API integration
-- 🔄 Trading execution engine
-- 🔄 WebSocket streaming
+- ✅ Hyperliquid API integration
+- ✅ Trading execution engine
+- ✅ WebSocket streaming
+- ✅ Risk management with dynamic position sizing
+- ✅ Stop loss order placement (normalTpsl)
+- ✅ Order book analysis
 - 🔄 Backtesting system
 - 🔄 Performance monitoring
 

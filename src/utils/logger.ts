@@ -55,35 +55,56 @@ export const logger = winston.createLogger({
         winston.format.colorize({ all: true }),
         winston.format.simple()
       ),
-      level: process.env.NODE_ENV === 'production' ? 'info' : 'trace'
+      level: process.env.NODE_ENV === 'production' ? 'info' : 'trace',
+      stderrLevels: ['error', 'warn', 'info', 'trade', 'signal', 'debug', 'trace'] // specific levels calling stderr
     })
   ]
 });
 
 // Specialized logging functions
 export class TradingLogger {
+  private static recentLogs: Array<{ level: string; message: string; timestamp: number }> = [];
+  private static MAX_LOGS = 50;
+
+  private static addToBuffer(level: string, message: string): void {
+    this.recentLogs.unshift({ level, message, timestamp: Date.now() });
+    if (this.recentLogs.length > this.MAX_LOGS) {
+      this.recentLogs.pop();
+    }
+  }
+
+  static getRecentLogs(count: number = 20): Array<{ level: string; message: string; timestamp: number }> {
+    return this.recentLogs.slice(0, count);
+  }
   static error(message: string, meta?: any): void {
     logger.error(message, meta);
+    this.addToBuffer('error', message);
   }
 
   static warn(message: string, meta?: any): void {
     logger.warn(message, meta);
+    this.addToBuffer('warn', message);
   }
 
   static info(message: string, meta?: any): void {
     logger.info(message, meta);
+    this.addToBuffer('info', message);
   }
 
   static trade(message: string, meta?: any): void {
     logger.log('trade', message, meta);
+    this.addToBuffer('trade', message);
   }
 
   static signal(message: string, meta?: any): void {
     logger.log('signal', message, meta);
+    this.addToBuffer('signal', message);
   }
 
   static debug(message: string, meta?: any): void {
     logger.debug(message, meta);
+    // Don't buffer debug logs to avoid noise, or maybe optional?
+    // this.addToBuffer('debug', message);
   }
 
   static trace(message: string, meta?: any): void {
