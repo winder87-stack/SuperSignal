@@ -5,8 +5,9 @@ This document outlines the proposed roadmap for the evolution of the Hyperliquid
 ## 1. Critical Stability & Safety Fixes
 
 ### [ ] State Reconciliation on Startup
+
 - **Issue**: Currently, `TradingEngine` starts with an empty `positions` map. If the bot is restarted while trades are open on the exchange, the bot will be unaware of them. It will fail to manage them (no trailing stops) and might open conflicting positions.
-- **Solution**: 
+- **Solution**:
   - On startup (in `HyperliquidSuperSignal.start`), fetch open positions from Hyperliquid API (`getUserState`).
   - Reconstruct `Position` objects and populate `TradingEngine`'s state.
   - Re-calculate Stop Loss / Take Profit orders if they are missing locally but exist on exchange, or verify they match.
@@ -14,6 +15,7 @@ This document outlines the proposed roadmap for the evolution of the Hyperliquid
 ## 2. Infrastructure & Connectivity (The "User Request")
 
 ### [ ] MCP Server (Model Context Protocol)
+
 - **Goal**: Enable LLMs (like Claude/ChatGPT/Gemini) to interact with the running bot directly.
 - **Implementation**: Build a TypeScript MCP server (using `@modelcontextprotocol/sdk`) that exposes tools:
   - `get_status()`: Returns running state, active pairs, PnL.
@@ -24,6 +26,7 @@ This document outlines the proposed roadmap for the evolution of the Hyperliquid
 - **Benefit**: "Chat to your bot" capabilities, automated debugging agents.
 
 ### [ ] Internal WebSocket Server
+
 - **Goal**: Broadcast real-time internal state to external UIs/Dashboards.
 - **Implementation**: A transparent WebSocket server (`ws` library) broadcasting:
   - `price_update`: Consolidated price/indicator data.
@@ -32,6 +35,7 @@ This document outlines the proposed roadmap for the evolution of the Hyperliquid
 - **Benefit**: Decouples the bot from the UI.
 
 ### [ ] Persistence Layer
+
 - **Goal**: Store trade history, signals, and performance metrics permanently.
 - **Implementation**: SQLite database (using `better-sqlite3` or `prisma`).
 - **Data to Store**:
@@ -42,6 +46,7 @@ This document outlines the proposed roadmap for the evolution of the Hyperliquid
 ## 3. Advanced Features
 
 ### [ ] Web Dashboard
+
 - **Goal**: Specific UI to visualize the "Super Signal".
 - **Features**:
   - Real-time chart with Stochastic indicators overlaid.
@@ -51,6 +56,7 @@ This document outlines the proposed roadmap for the evolution of the Hyperliquid
 - **Tech**: Next.js (as suggested by guidelines) or a simple Vite React app connecting to the Internal WebSocket Server.
 
 ### [ ] Backtesting Engine
+
 - **Goal**: Validate strategy against historical data.
 - **Implementation**:
   - Extend `TradingEngine` to work in "Simulation Mode".
@@ -58,5 +64,6 @@ This document outlines the proposed roadmap for the evolution of the Hyperliquid
   - Record hypothetical PnL relative to slippage/fees.
 
 ## 4. Immediate Next Steps (Proposed)
+
 1. **Implement State Reconciliation** (Critical for safety).
 2. **Build MCP Server + WebSocket Server** (To fulfill user request).

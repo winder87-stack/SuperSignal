@@ -8,9 +8,10 @@ import { TRADING_PAIRS } from "../types/index.js";
 export class BotMcpServer {
     private server: McpServer;
 
-    constructor(
-        private engine: TradingEngine
-    ) {
+    private engine: TradingEngine;
+
+    constructor(engine: TradingEngine) {
+        this.engine = engine;
         this.server = new McpServer({
             name: "hyperliquid-super-signal",
             version: "1.0.0",
@@ -19,7 +20,7 @@ export class BotMcpServer {
         this.setupTools();
     }
 
-    private setupTools() {
+    private setupTools(): void {
         // Tool: Get Bot Status
         this.server.tool(
             "get_status",
@@ -49,7 +50,17 @@ export class BotMcpServer {
             async () => {
                 const positions = this.engine.getPositions();
                 // Convert BigInts/Decimals to string for JSON
-                const safePositions = positions.map(p => ({
+                const safePositions = positions.map((p): {
+                    pair: string;
+                    direction: string;
+                    size: string;
+                    entryPrice: string;
+                    pnl: string;
+                    stopLoss: string;
+                    takeProfit?: string;
+                    trailingStop?: string;
+                    timestamp: string;
+                } => ({
                     pair: p.pair,
                     direction: p.direction,
                     size: p.size.toString(),
@@ -86,7 +97,7 @@ export class BotMcpServer {
         );
     }
 
-    public async start() {
+    public async start(): Promise<void> {
         // Use Stdio transport for local agent interaction
         const transport = new StdioServerTransport();
         await this.server.connect(transport);

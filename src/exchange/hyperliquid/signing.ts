@@ -1,4 +1,4 @@
-import { Wallet, keccak256, getBytes } from 'ethers';
+import { Wallet, keccak256 } from 'ethers';
 import { encode } from '@msgpack/msgpack';
 
 const DOMAIN_CHAIN_ID_MAINNET = 42161;
@@ -19,7 +19,12 @@ export const EIP712_AGENT_TYPE = {
     ]
 };
 
-export function getDomain(isTestnet: boolean) {
+export function getDomain(isTestnet: boolean): {
+    name: string;
+    version: string;
+    chainId: number;
+    verifyingContract: string;
+} {
     return {
         name: "HyperliquidSignTransaction",
         version: "1",
@@ -30,7 +35,7 @@ export function getDomain(isTestnet: boolean) {
 
 export async function signL1Action(
     wallet: Wallet,
-    action: any,
+    action: object,
     isTestnet: boolean,
     nonce: number
 ): Promise<{ r: string; s: string; v: number }> {
@@ -55,7 +60,8 @@ export async function signL1Action(
     // JS objects are unordered.
     // However, the standard JS msgpack encoder is consistent enough.
 
-    const actionWithNonce = {
+    // Note: actionWithNonce kept for documentation - nonce handling varies by action type
+    const _actionWithNonce = {
         ...action,
         nonce,
         // Wait, does the signed payload include the nonce?

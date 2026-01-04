@@ -1,7 +1,7 @@
 import { HyperLiquidAPI } from './api.js';
 import { HyperLiquidWebSocket } from './websocket.js';
 import { AssetIndexManager } from './asset-index.js';
-import { TradingLogger } from '../../utils/logger.js';
+import { TradingLogger, generateRequestId } from '../../utils/logger.js';
 import { EventEmitter } from 'events';
 
 export class HyperLiquidClient extends EventEmitter {
@@ -21,13 +21,17 @@ export class HyperLiquidClient extends EventEmitter {
     }
 
     public async connect(): Promise<void> {
+        const requestId = generateRequestId();
+        TradingLogger.setRequestId(requestId);
+        TradingLogger.setComponent('HyperLiquidClient');
+
         try {
             // Initialize asset index mappings before connecting
             await this.assetIndex.initialize();
             await this.ws.connect();
-            TradingLogger.info("HyperLiquid Client Connected");
+            TradingLogger.info("HyperLiquid Client Connected", { requestId });
         } catch (error) {
-            TradingLogger.error("Failed to connect HyperLiquid Client");
+            TradingLogger.logError(error, "Failed to connect HyperLiquid Client");
             throw error;
         }
     }

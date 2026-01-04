@@ -85,15 +85,12 @@ export class DivergenceDetector {
         const pivots = this.pivotDetector.detect(candles);
         if (pivots.length < 2) return null;
 
-        const currentPrice = candles[candles.length - 1];
-        const currentStoch = stochasticHistory[stochasticHistory.length - 1];
-
         // Check for bullish divergence first
-        const bullish = this.detectBullish(pivots, stochasticHistory, currentPrice, currentStoch);
+        const bullish = this.detectBullish(pivots, stochasticHistory);
         if (bullish) return 'bullish';
 
         // Check for bearish divergence
-        const bearish = this.detectBearish(pivots, stochasticHistory, currentPrice, currentStoch);
+        const bearish = this.detectBearish(pivots, stochasticHistory);
         if (bearish) return 'bearish';
 
         return null;
@@ -115,15 +112,12 @@ export class DivergenceDetector {
         const pivots = this.pivotDetector.detect(candles);
         if (pivots.length < 2) return null;
 
-        const currentPrice = candles[candles.length - 1];
-        const currentStoch = stochasticHistory[stochasticHistory.length - 1];
-
         // Check bullish
-        const bullishResult = this.detectBullishDetailed(pivots, stochasticHistory, currentPrice, currentStoch);
+        const bullishResult = this.detectBullishDetailed(pivots, stochasticHistory);
         if (bullishResult) return bullishResult;
 
         // Check bearish
-        const bearishResult = this.detectBearishDetailed(pivots, stochasticHistory, currentPrice, currentStoch);
+        const bearishResult = this.detectBearishDetailed(pivots, stochasticHistory);
         if (bearishResult) return bearishResult;
 
         return null;
@@ -134,9 +128,7 @@ export class DivergenceDetector {
      */
     private detectBullish(
         pivots: Pivot[],
-        stochasticHistory: StochasticValue[],
-        currentPrice: Candle,
-        currentStoch: StochasticValue
+        stochasticHistory: StochasticValue[]
     ): boolean {
         const lowPivots = pivots.filter(p => p.type === 'low');
         if (lowPivots.length < 2) return false;
@@ -162,9 +154,7 @@ export class DivergenceDetector {
      */
     private detectBearish(
         pivots: Pivot[],
-        stochasticHistory: StochasticValue[],
-        currentPrice: Candle,
-        currentStoch: StochasticValue
+        stochasticHistory: StochasticValue[]
     ): boolean {
         const highPivots = pivots.filter(p => p.type === 'high');
         if (highPivots.length < 2) return false;
@@ -190,9 +180,7 @@ export class DivergenceDetector {
      */
     private detectBullishDetailed(
         pivots: Pivot[],
-        stochasticHistory: StochasticValue[],
-        currentPrice: Candle,
-        currentStoch: StochasticValue
+        stochasticHistory: StochasticValue[]
     ): DivergenceResult | null {
         const lowPivots = pivots.filter(p => p.type === 'low');
         if (lowPivots.length < 2) return null;
@@ -234,9 +222,7 @@ export class DivergenceDetector {
      */
     private detectBearishDetailed(
         pivots: Pivot[],
-        stochasticHistory: StochasticValue[],
-        currentPrice: Candle,
-        currentStoch: StochasticValue
+        stochasticHistory: StochasticValue[]
     ): DivergenceResult | null {
         const highPivots = pivots.filter(p => p.type === 'high');
         if (highPivots.length < 2) return null;

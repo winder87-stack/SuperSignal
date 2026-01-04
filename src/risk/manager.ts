@@ -1,6 +1,6 @@
 import { Decimal } from 'decimal.js';
 import { TradingLogger } from '../utils/logger.js';
-import { RiskConfig, Position, TradingPair } from '../types/index.js';
+import { RiskConfig, TradingPair } from '../types/index.js';
 import { FinancialMath } from '../utils/math.js';
 
 export class RiskManager {
@@ -62,6 +62,38 @@ export class RiskManager {
     }
 
     /**
+     * Pre-trade check: Calculate potential loss if trade is stopped out
+     * @param entryPrice - Entry price for the trade
+     * @param stopLoss - Stop loss price
+     * @param positionSize - Position size in asset units
+     * @returns true if trade is allowed, false if potential loss would exceed daily limit
+     */
+    public checkPotentialLoss(
+        entryPrice: Decimal,
+        stopLoss: Decimal,
+        positionSize: Decimal
+    ): { allowed: boolean; reason?: string } {
+        this.checkDailyReset();
+
+        // Calculate potential loss if stopped out: |entryPrice - stopLoss| * positionSize
+        const potentialLoss = entryPrice.sub(stopLoss).abs().mul(positionSize);
+
+        // Check if dailyLoss + potentialLoss >= maxDailyLoss
+        const maxDailyLoss = this.config.maxDrawdown.negated();
+        const projectedLoss = this.dailyPnl.sub(potentialLoss);
+
+        if (FinancialMath.lessThanOrEqual(projectedLoss, maxDailyLoss)) {
+            TradingLogger.warn(
+                `Pre-trade check rejected: Daily loss (${this.dailyPnl.toFixed(2)}) + potential loss (${potentialLoss.toFixed(2)}) ` +
+                `would exceed max daily loss (${maxDailyLoss.toFixed(2)})`
+            );
+            return { allowed: false, reason: 'Potential loss would exceed daily loss limit' };
+        }
+
+        return { allowed: true };
+    }
+
+    /**
      * Check if a trade is allowed based on risk parameters
      */
     public canTrade(
@@ -73,7 +105,7 @@ export class RiskManager {
         this.checkDailyReset();
 
         // 1. Daily Loss Circuit Breaker
-        if (FinancialMath.lessThanOrEqual(this.dailyPnl, this.config.maxDrawdown.negated())) {
+        if (FinancialMath.lessThan(this.dailyPnl, this.config.maxDrawdown.negated())) {
             return { allowed: false, reason: 'Daily loss limit reached' };
         }
 

@@ -107,13 +107,13 @@ export enum AssetIndexErrorCode {
  */
 export interface IAssetIndexManager {
     /**
-     * Initialize the manager by fetching asset mappings from API
+     * Initialize manager by fetching asset mappings from API
      * @throws AssetIndexError if initialization fails
      */
     initialize(): Promise<void>;
 
     /**
-     * Get the asset index for a given coin symbol
+     * Get asset index for a given coin symbol
      * @param coin - Coin symbol (e.g., "BTC", "ETH")
      * @returns Asset index (integer)
      * @throws AssetIndexError if symbol not found or not initialized
@@ -121,7 +121,7 @@ export interface IAssetIndexManager {
     getAssetIndex(coin: string): number;
 
     /**
-     * Get the coin symbol for a given asset index
+     * Get coin symbol for a given asset index
      * @param index - Asset index (integer)
      * @returns Coin symbol
      * @throws AssetIndexError if index not found or not initialized
@@ -129,13 +129,13 @@ export interface IAssetIndexManager {
     getCoinSymbol(index: number): string;
 
     /**
-     * Refresh the asset mappings from API
+     * Refresh asset mappings from API
      * @throws AssetIndexError if refresh fails
      */
     refresh(): Promise<void>;
 
     /**
-     * Check if the manager is initialized
+     * Check if manager is initialized
      * @returns true if initialized, false otherwise
      */
     isInitialized(): boolean;

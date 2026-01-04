@@ -5,6 +5,7 @@ import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
 import { Decimal } from 'decimal.js';
 import { TradingEngine } from '../../src/core/engine.js';
 import { Candle, TradingPair, TradingSignal, Position } from '../../src/types/index.js';
+import { StochasticManager } from '../../src/indicators/stochastic.js';
 
 // Helper to create candle data
 function createCandle(
@@ -52,13 +53,17 @@ function createMockClient() {
     return {
         api: {
             placeOrder: vi.fn().mockResolvedValue({
+                status: 'ok',
                 response: { data: { statuses: [{ resting: { oid: 12345 } }] } }
             }),
             cancelOrders: vi.fn().mockResolvedValue({}),
             getUserState: vi.fn().mockResolvedValue({
                 marginSummary: { accountValue: '10000' }
             }),
-            getAddress: vi.fn().mockReturnValue('0xmockaddress')
+            getAddress: vi.fn().mockReturnValue('0xmockaddress'),
+            getOpenOrders: vi.fn().mockResolvedValue([
+                { coin: 'BTC', reduceOnly: true, triggerPx: '49000' }
+            ])
         },
         assetIndex: {
             getAssetIndex: vi.fn().mockReturnValue(1)
@@ -67,10 +72,12 @@ function createMockClient() {
 }
 
 // Mock factory for SignalProcessor
-function createMockSignalProcessor(checkExitsResult: TradingPair[] = []) {
+function createMockSignalProcessor(checkExitsResult: TradingPair[] = [], checkExitsWithTypeResult: Array<{ pair: TradingPair; exitType: 'partial' | 'full' }> = []) {
     return {
         processCandle: vi.fn().mockReturnValue(null),
-        checkExits: vi.fn().mockReturnValue(checkExitsResult)
+        checkExits: vi.fn().mockReturnValue(checkExitsResult),
+        checkExitsWithType: vi.fn().mockReturnValue(checkExitsWithTypeResult),
+        triggerCooldown: vi.fn()
     };
 }
 
@@ -79,6 +86,7 @@ function createMockRiskManager(canTradeResult = { allowed: true }) {
     return {
         canTrade: vi.fn().mockReturnValue(canTradeResult),
         calculatePositionSize: vi.fn().mockReturnValue(new Decimal(100)),
+        checkPotentialLoss: vi.fn().mockReturnValue({ allowed: true }),
         updatePnL: vi.fn(),
         getConfig: vi.fn().mockReturnValue({
             maxPositionSize: new Decimal(1000),
@@ -109,7 +117,7 @@ describe('TradingEngine', () => {
     });
 
     describe('handleCandle - Exit Signal Integration', () => {
-        it('should call checkExits for open positions', async () => {
+        it('should call checkExitsWithType for open positions', async () => {
             // Simulate an open position by accessing private positions map
             const position: Position = {
                 pair: 'BTC-USDC',
@@ -128,13 +136,13 @@ describe('TradingEngine', () => {
 
             await engine.handleCandle('BTC-USDC', candle);
 
-            expect(mockSignalProcessor.checkExits).toHaveBeenCalledWith([
-                { direction: 'long', pair: 'BTC-USDC' }
+            expect(mockSignalProcessor.checkExitsWithType).toHaveBeenCalledWith([
+                { direction: 'long', pair: 'BTC-USDC', partialExitTaken: undefined }
             ]);
         });
 
-        it('should close position when checkExits returns the pair', async () => {
-            // Setup: open position and checkExits returning that pair
+        it('should close position when checkExitsWithType returns full exit', async () => {
+            // Setup: open position and checkExitsWithType returning full exit
             const position: Position = {
                 pair: 'ETH-USDC',
                 direction: 'short',
@@ -146,7 +154,9 @@ describe('TradingEngine', () => {
             };
 
             (engine as any).positions.set('ETH-USDC', position);
-            mockSignalProcessor.checkExits.mockReturnValue(['ETH-USDC']);
+            mockSignalProcessor.checkExitsWithType.mockReturnValue([
+                { pair: 'ETH-USDC', exitType: 'full' }
+            ]);
 
             const candle = createCandle(Date.now(), 2900, 2950, 2880, 2890);
 
@@ -158,7 +168,7 @@ describe('TradingEngine', () => {
             expect(orderCall[0][0].r).toBe(true); // reduce-only flag
         });
 
-        it('should not process entry signals after exit', async () => {
+        it('should not process entry signals after full exit', async () => {
             // Setup open position
             const position: Position = {
                 pair: 'SOL-USDC',
@@ -172,8 +182,10 @@ describe('TradingEngine', () => {
 
             (engine as any).positions.set('SOL-USDC', position);
 
-            // checkExits returns the pair (exit triggered)
-            mockSignalProcessor.checkExits.mockReturnValue(['SOL-USDC']);
+            // checkExitsWithType returns full exit
+            mockSignalProcessor.checkExitsWithType.mockReturnValue([
+                { pair: 'SOL-USDC', exitType: 'full' }
+            ]);
 
             // processCandle returns a new signal (should be ignored)
             const newSignal = createSignal('SOL-USDC', 'short', 95);
@@ -247,7 +259,22 @@ describe('TradingEngine', () => {
     });
 
     describe('updateTrailingStop', () => {
-        it('should not update when position not profitable', async () => {
+        // Helper to set up stochastic manager with Fast K history
+        function setupStochasticManager(
+            engine: TradingEngine,
+            pair: string,
+            fastKHistory: { k: number; d: number }[]
+        ) {
+            const manager = new StochasticManager();
+            (manager as any).fastHistory = fastKHistory.map((h, i) => ({
+                k: new Decimal(h.k),
+                d: new Decimal(h.d),
+                timestamp: Date.now() - (fastKHistory.length - i) * 60000
+            }));
+            (engine as any).stochasticManagers.set(pair, manager);
+        }
+
+        it('should not update when no stochastic manager available', async () => {
             const position: Position = {
                 pair: 'BTC-USDC',
                 direction: 'long',
@@ -262,16 +289,15 @@ describe('TradingEngine', () => {
 
             (engine as any).positions.set('BTC-USDC', position);
 
-            // Current price below entry (not profitable for long)
-            const candle = createCandle(Date.now(), 49500, 49600, 49400, 49500);
+            const candle = createCandle(Date.now(), 51000, 51100, 50900, 51000);
 
             await (engine as any).updateTrailingStop('BTC-USDC', candle);
 
-            // No API calls for trailing stop update
+            // No API calls since no stochastic manager
             expect(mockClient.api.cancelOrders).not.toHaveBeenCalled();
         });
 
-        it('should activate trailing stop after 1% profit', async () => {
+        it('should activate trailing stop when Fast K crosses above 50 for long', async () => {
             const position: Position = {
                 pair: 'BTC-USDC',
                 direction: 'long',
@@ -287,17 +313,51 @@ describe('TradingEngine', () => {
 
             (engine as any).positions.set('BTC-USDC', position);
 
-            // Current price 2% above entry
+            // Fast K crosses from 45 to 55 (above 50)
+            setupStochasticManager(engine, 'BTC-USDC', [
+                { k: 45, d: 40 },
+                { k: 55, d: 50 }
+            ]);
+
             const candle = createCandle(Date.now(), 51000, 51100, 50900, 51000);
 
             await (engine as any).updateTrailingStop('BTC-USDC', candle);
 
-            // Check that position was updated
             const updatedPosition = (engine as any).positions.get('BTC-USDC');
             expect(updatedPosition.trailingStopActivated).toBe(true);
+            expect(updatedPosition.breakEvenReached).toBe(true);
         });
 
-        it('should call cancelOrders with correct order ID', async () => {
+        it('should NOT activate when Fast K stays below 50 for long', async () => {
+            const position: Position = {
+                pair: 'BTC-USDC',
+                direction: 'long',
+                size: new Decimal(0.1),
+                entryPrice: new Decimal(50000),
+                stopLoss: new Decimal(49000),
+                trailingStop: new Decimal(49000),
+                trailingStopActivated: false,
+                timestamp: Date.now(),
+                signalId: 'test-signal'
+            };
+
+            (engine as any).positions.set('BTC-USDC', position);
+
+            // Fast K moves from 40 to 48 (stays below 50)
+            setupStochasticManager(engine, 'BTC-USDC', [
+                { k: 40, d: 35 },
+                { k: 48, d: 45 }
+            ]);
+
+            const candle = createCandle(Date.now(), 51000, 51100, 50900, 51000);
+
+            await (engine as any).updateTrailingStop('BTC-USDC', candle);
+
+            const updatedPosition = (engine as any).positions.get('BTC-USDC');
+            expect(updatedPosition.trailingStopActivated).toBe(false);
+        });
+
+        it('should activate trailing stop when Fast K crosses below 50 for short', async () => {
             const position: Position = {
                 pair: 'ETH-USDC',
                 direction: 'short',
@@ -306,25 +366,29 @@ describe('TradingEngine', () => {
                 stopLoss: new Decimal(3060),
                 stopLossOrderId: 98765,
                 trailingStop: new Decimal(3060),
-                trailingStopActivated: true,
+                trailingStopActivated: false,
                 timestamp: Date.now(),
                 signalId: 'test-signal'
             };
 
             (engine as any).positions.set('ETH-USDC', position);
 
-            // Price dropped 2% (profitable for short)
+            // Fast K crosses from 55 to 45 (below 50)
+            setupStochasticManager(engine, 'ETH-USDC', [
+                { k: 55, d: 52 },
+                { k: 45, d: 48 }
+            ]);
+
             const candle = createCandle(Date.now(), 2940, 2960, 2920, 2940);
 
             await (engine as any).updateTrailingStop('ETH-USDC', candle);
 
-            // Should cancel the old stop loss order
-            expect(mockClient.api.cancelOrders).toHaveBeenCalledWith([
-                { a: 1, o: 98765 }
-            ]);
+            const updatedPosition = (engine as any).positions.get('ETH-USDC');
+            expect(updatedPosition.trailingStopActivated).toBe(true);
+            expect(updatedPosition.breakEvenReached).toBe(true);
         });
 
-        it('should place new stop order at updated price', async () => {
+        it('should move stop to breakeven (entry price) on activation', async () => {
             const position: Position = {
                 pair: 'BTC-USDC',
                 direction: 'long',
@@ -333,29 +397,32 @@ describe('TradingEngine', () => {
                 stopLoss: new Decimal(49000),
                 stopLossOrderId: 12345,
                 trailingStop: new Decimal(49000),
-                trailingStopActivated: true,
+                trailingStopActivated: false,
                 timestamp: Date.now(),
                 signalId: 'test-signal'
             };
 
             (engine as any).positions.set('BTC-USDC', position);
 
-            // 3% profit
-            const candle = createCandle(Date.now(), 51500, 51600, 51400, 51500);
+            // Fast K crosses above 50
+            setupStochasticManager(engine, 'BTC-USDC', [
+                { k: 48, d: 45 },
+                { k: 52, d: 50 }
+            ]);
+
+            const candle = createCandle(Date.now(), 51000, 51100, 50900, 51000);
 
             await (engine as any).updateTrailingStop('BTC-USDC', candle);
 
-            // Should place new stop loss order
-            expect(mockClient.api.placeOrder).toHaveBeenCalled();
-            const orderCall = mockClient.api.placeOrder.mock.calls[0];
-            expect(orderCall[0][0].t.trigger.tpsl).toBe('sl');
+            // Should cancel old and place new stop at entry price (breakeven)
+            expect(mockClient.api.cancelOrders).toHaveBeenCalled();
+
+            const updatedPosition = (engine as any).positions.get('BTC-USDC');
+            // Stop should be at entry price (50000)
+            expect(updatedPosition.trailingStop.toNumber()).toBe(50000);
         });
 
-        it('should extract and store new order ID', async () => {
-            mockClient.api.placeOrder.mockResolvedValue({
-                response: { data: { statuses: [{ resting: { oid: 99999 } }] } }
-            });
-
+        it('should trail by ATR after breakeven is reached', async () => {
             const position: Position = {
                 pair: 'SOL-USDC',
                 direction: 'long',
@@ -363,21 +430,30 @@ describe('TradingEngine', () => {
                 entryPrice: new Decimal(100),
                 stopLoss: new Decimal(98),
                 stopLossOrderId: 11111,
-                trailingStop: new Decimal(98),
+                trailingStop: new Decimal(100), // Already at breakeven
                 trailingStopActivated: true,
+                breakEvenReached: true,
+                lastAtr: new Decimal(2), // ATR = 2
                 timestamp: Date.now(),
                 signalId: 'test-signal'
             };
 
             (engine as any).positions.set('SOL-USDC', position);
 
-            // 3% profit
-            const candle = createCandle(Date.now(), 103, 104, 102.5, 103);
+            // Set up stochastic manager (already activated, just need history)
+            setupStochasticManager(engine, 'SOL-USDC', [
+                { k: 60, d: 55 },
+                { k: 65, d: 60 }
+            ]);
+
+            // Price moved up significantly: new stop = 110 - 1.5*2 = 107
+            const candle = createCandle(Date.now(), 110, 112, 109, 110);
 
             await (engine as any).updateTrailingStop('SOL-USDC', candle);
 
             const updatedPosition = (engine as any).positions.get('SOL-USDC');
-            expect(updatedPosition.stopLossOrderId).toBe(99999);
+            // Stop should trail: 110 - (1.5 * 2) = 107
+            expect(updatedPosition.trailingStop.toNumber()).toBe(107);
         });
     });
 
@@ -411,6 +487,135 @@ describe('TradingEngine', () => {
             expect(positions).toHaveLength(2);
             expect(positions.map(p => p.pair)).toContain('BTC-USDC');
             expect(positions.map(p => p.pair)).toContain('ETH-USDC');
+        });
+    });
+
+    describe('Partial Exit / Scale-Out', () => {
+        it('should call closePartialPosition when exitType is partial', async () => {
+            const position: Position = {
+                pair: 'BTC-USDC',
+                direction: 'long',
+                size: new Decimal(0.2),
+                entryPrice: new Decimal(50000),
+                stopLoss: new Decimal(49000),
+                stopLossOrderId: 12345,
+                partialExitTaken: false,
+                timestamp: Date.now(),
+                signalId: 'test-signal'
+            };
+
+            (engine as any).positions.set('BTC-USDC', position);
+
+            // Mock checkExitsWithType to return partial exit
+            mockSignalProcessor.checkExitsWithType.mockReturnValue([
+                { pair: 'BTC-USDC', exitType: 'partial' }
+            ]);
+
+            const candle = createCandle(Date.now(), 51000, 51100, 50900, 51000);
+
+            await engine.handleCandle('BTC-USDC', candle);
+
+            // Should place partial close order (50%)
+            expect(mockClient.api.placeOrder).toHaveBeenCalled();
+            const orderCall = mockClient.api.placeOrder.mock.calls[0];
+            expect(orderCall[0][0].r).toBe(true); // reduce-only flag
+            expect(orderCall[0][0].s).toBe('0.10000000'); // 50% of 0.2
+
+            // Should update position state
+            const updatedPosition = (engine as any).positions.get('BTC-USDC');
+            expect(updatedPosition.partialExitTaken).toBe(true);
+            expect(updatedPosition.size.toNumber()).toBe(0.1);
+        });
+
+        it('should NOT trigger partial exit when partialExitTaken is true', async () => {
+            const position: Position = {
+                pair: 'BTC-USDC',
+                direction: 'long',
+                size: new Decimal(0.1),
+                entryPrice: new Decimal(50000),
+                stopLoss: new Decimal(49000),
+                partialExitTaken: true, // Already taken
+                timestamp: Date.now(),
+                signalId: 'test-signal'
+            };
+
+            (engine as any).positions.set('BTC-USDC', position);
+
+            // Mock returns partial (but should be skipped since already taken)
+            mockSignalProcessor.checkExitsWithType.mockReturnValue([
+                { pair: 'BTC-USDC', exitType: 'partial' }
+            ]);
+
+            const candle = createCandle(Date.now(), 51000, 51100, 50900, 51000);
+
+            await engine.handleCandle('BTC-USDC', candle);
+
+            // Should NOT place any orders
+            expect(mockClient.api.placeOrder).not.toHaveBeenCalled();
+        });
+
+        it('should cancel and resize stop loss after partial exit', async () => {
+            const position: Position = {
+                pair: 'SOL-USDC',
+                direction: 'long',
+                size: new Decimal(10),
+                entryPrice: new Decimal(100),
+                stopLoss: new Decimal(98),
+                trailingStop: new Decimal(99),
+                stopLossOrderId: 55555,
+                partialExitTaken: false,
+                timestamp: Date.now(),
+                signalId: 'test-signal'
+            };
+
+            (engine as any).positions.set('SOL-USDC', position);
+
+            mockSignalProcessor.checkExitsWithType.mockReturnValue([
+                { pair: 'SOL-USDC', exitType: 'partial' }
+            ]);
+
+            const candle = createCandle(Date.now(), 105, 106, 104, 105);
+
+            await engine.handleCandle('SOL-USDC', candle);
+
+            // Should cancel old stop
+            expect(mockClient.api.cancelOrders).toHaveBeenCalledWith([{ a: 1, o: 55555 }]);
+
+            // Second placeOrder call should be the new stop loss with reduced size
+            const slOrderCall = mockClient.api.placeOrder.mock.calls[1];
+            expect(slOrderCall[0][0].s).toBe('5.00000000'); // 50% of 10
+        });
+
+        it('should close remaining position on full exit after partial', async () => {
+            const position: Position = {
+                pair: 'ETH-USDC',
+                direction: 'short',
+                size: new Decimal(0.5), // Remaining 50%
+                entryPrice: new Decimal(3000),
+                stopLoss: new Decimal(3060),
+                partialExitTaken: true,
+                timestamp: Date.now(),
+                signalId: 'test-signal'
+            };
+
+            (engine as any).positions.set('ETH-USDC', position);
+
+            // Full exit triggered
+            mockSignalProcessor.checkExitsWithType.mockReturnValue([
+                { pair: 'ETH-USDC', exitType: 'full' }
+            ]);
+
+            const candle = createCandle(Date.now(), 2890, 2910, 2880, 2890);
+
+            await engine.handleCandle('ETH-USDC', candle);
+
+            // Should place close order with remaining size
+            expect(mockClient.api.placeOrder).toHaveBeenCalled();
+            const orderCall = mockClient.api.placeOrder.mock.calls[0];
+            expect(orderCall[0][0].s).toBe('0.50000000'); // Full remaining amount
+
+            // Position should be deleted
+            expect((engine as any).positions.get('ETH-USDC')).toBeUndefined();
         });
     });
 });

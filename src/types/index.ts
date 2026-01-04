@@ -4,11 +4,16 @@ import { Decimal } from 'decimal.js';
 
 // Trading Pairs (minimum 10x leverage perpetuals)
 export const TRADING_PAIRS = [
+  'BTC-USDC',
+  'ETH-USDC',
   'SOL-USDC',
-  'AAVE-USDC',
-  'BSV-USDC',
-  'ZRO-USDC',
-  'TAO-USDC'
+  'XRP-USDC',
+  'kPEPE-USDC',
+  'ADA-USDC',
+  'HYPE-USDC',
+  'FARTCOIN-USDC',
+  'BNB-USDC',
+  'DOGE-USDC'
 ] as const;
 
 export type TradingPair = typeof TRADING_PAIRS[number];
@@ -26,6 +31,15 @@ export const STOCHASTIC_CONFIGS = {
   slow: { kPeriod: 40, dPeriod: 4, name: 'Slow' },
   trend: { kPeriod: 60, dPeriod: 10, name: 'Trend' }
 } as const;
+
+// Entry Mode Configuration
+// - "strict": All 4 stochastics must be in extreme zones (<20 or >80)
+// - "relaxed": Fast+Medium in extreme zones, Slow+Trend as directional filters (>50 for longs, <50 for shorts)
+export type EntryMode = 'strict' | 'relaxed';
+
+export interface StrategyConfig {
+  entryMode: EntryMode;
+}
 
 // Trading Signal Types
 export type SignalDirection = 'long' | 'short' | 'neutral';
@@ -98,6 +112,9 @@ export interface Position {
   takeProfit?: Decimal; // Take profit price for bracket orders
   trailingStop?: Decimal; // Current trailing stop price
   trailingStopActivated?: boolean; // Whether trailing stop has been activated
+  breakEvenReached?: boolean; // Whether stop has moved to breakeven
+  lastAtr?: Decimal; // Last known ATR value for trailing distance
+  partialExitTaken?: boolean; // Whether first 50% scale-out has occurred
   timestamp: number;
   signalId: string;
 }
@@ -131,6 +148,7 @@ export interface RiskConfig {
   stopLossPercentage: Decimal; // Stop loss as percentage (e.g., 0.02 for 2%)
   maxDrawdown: Decimal; // Max drawdown before halting
   riskPercentage: Decimal; // Percentage of account to risk per trade (e.g., 0.01 for 1%)
+  maxConcurrentPositions?: number; // Max number of concurrent positions (default: unlimited)
 }
 
 // Performance Metrics
@@ -158,6 +176,6 @@ export interface BotConfig {
 // WebSocket Message Types
 export interface WsMessage {
   type: 'market_data' | 'order_update' | 'position_update' | 'error';
-  data: any;
+  data: unknown;
   timestamp: number;
 }

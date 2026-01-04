@@ -73,7 +73,7 @@ export class OrderBookAnalyzer {
         let remainingSize = orderSize;
         let totalCost = 0;
         let totalVolume = 0;
-        let levelsConsumed = 0;
+        let _levelsConsumed = 0;
 
         // Walk through order book levels
         for (const level of levels) {
@@ -88,7 +88,7 @@ export class OrderBookAnalyzer {
             totalCost += sizeToConsume * levelPrice;
             totalVolume += sizeToConsume;
             remainingSize -= sizeToConsume;
-            levelsConsumed++;
+            _levelsConsumed++;
         }
 
         // Calculate weighted average price

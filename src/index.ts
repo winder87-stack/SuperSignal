@@ -1,7 +1,7 @@
 // Hyperliquid Super Signal - Main Entry Point
-import { TradingLogger } from './utils/logger.js';
+import { TradingLogger, generateRequestId } from './utils/logger.js';
+import { intervalManager } from './utils/intervalManager.js';
 import { TRADING_PAIRS, TradingPair, Candle } from './types/index.js';
-import { StochasticManager } from './indicators/stochastic.js';
 import { SignalProcessor } from './strategies/superSignal.js';
 import { HyperLiquidClient } from './exchange/hyperliquid/index.js';
 import { TradingEngine } from './core/engine.js';
@@ -9,66 +9,98 @@ import { RiskManager } from './risk/manager.js';
 import { Decimal } from 'decimal.js';
 import dotenv from 'dotenv';
 import { OrderBookManager, OrderBookAnalyzer } from './trading/order-book/index.js';
-import type { OrderBookMetrics, ExecutionParameters, SlippageEstimate } from './trading/order-book/types.js';
 import { BotWebSocketServer } from './api/websocket.js';
 
 import { BotMcpServer } from './api/mcp.js';
 import { DatabaseService } from './core/database.js';
+import { DryRunManager } from './core/dryRunManager.js';
 
 dotenv.config();
 
-class HyperliquidSuperSignal {
+// Initialize IntervalManager for centralized interval management
+intervalManager.initialize();
+
+export class HyperliquidSuperSignal {
   private engine: TradingEngine;
   private client: HyperLiquidClient;
   private isRunning: boolean = false;
+  private isShuttingDown: boolean = false;
   private orderBookManager: OrderBookManager;
   private orderBookAnalyzer: OrderBookAnalyzer;
-  private orderBookMetrics: Map<string, OrderBookMetrics> = new Map();
   private wsServer: BotWebSocketServer;
   private mcpServer: BotMcpServer;
   private databaseService: DatabaseService;
+  private dryRunManager?: DryRunManager;
 
   constructor() {
-    TradingLogger.info("Initializing Hyperliquid Super Signal Trading Bot (REFACTORED)");
+    // Check for dry-run mode
+    const isDryRun = process.env.DRY_RUN === 'true';
+    const dryRunBalance = new Decimal(process.env.DRY_RUN_BALANCE || '200');
+
+    TradingLogger.setComponent('TradingBot');
+    const requestId = generateRequestId();
+    TradingLogger.setRequestId(requestId);
+
+    if (isDryRun) {
+      TradingLogger.info(`Initializing Hyperliquid Super Signal Trading Bot [DRY-RUN MODE]`, {
+        requestId,
+        dryRunBalance: dryRunBalance.toFixed(2)
+      });
+    } else {
+      TradingLogger.info("Initializing Hyperliquid Super Signal Trading Bot (REFACTORED)", { requestId });
+    }
 
     // Initialize Order Book Components
     this.orderBookManager = new OrderBookManager();
     this.orderBookAnalyzer = new OrderBookAnalyzer();
 
-    // Initialize Risk Manager (configured for $1000 testnet account)
+    // Initialize Risk Manager (configured for $200 account, high-conviction quality-over-quantity approach)
     const riskConfig = {
-      maxPositionSize: new Decimal(200),       // $200 per position (allows ~5 positions)
-      maxTotalExposure: new Decimal(800),      // $800 max total (80% of account)
-      stopLossPercentage: new Decimal(0.02),   // 2% SL
-      maxDrawdown: new Decimal(100),           // $100 max daily loss (10% of account)
-      riskPercentage: new Decimal(0.10)        // Risk 10% of account per trade ($100)
+      maxPositionSize: new Decimal(process.env.RISK_MAX_POSITION_SIZE || '150'),       // $150 per position (single position focus)
+      maxTotalExposure: new Decimal(process.env.RISK_MAX_TOTAL_EXPOSURE || '150'),     // $150 max total (single position focus)
+      stopLossPercentage: new Decimal(process.env.RISK_STOP_LOSS_PERCENTAGE || '0.02'), // 2% fallback stop
+      maxDrawdown: new Decimal(process.env.RISK_MAX_DRAWDOWN || '0.20'),               // 20% max drawdown ($40 halt for $200 account)
+      riskPercentage: new Decimal(process.env.RISK_PERCENTAGE || '0.05'),              // Risk 5% of account per trade ($10 for A+ setups)
+      maxConcurrentPositions: 1                                                         // Single position focus
     };
     const riskManager = new RiskManager(riskConfig);
 
-    // Initialize Signal Processor
-    const signalProcessor = new SignalProcessor([...TRADING_PAIRS]);
+    // Initialize Signal Processor with entry mode from env or default to 'strict' (all 4 stochastics must be in extreme)
+    const entryMode = (process.env.STRATEGY_ENTRY_MODE === 'relaxed' ? 'relaxed' : 'strict') as 'strict' | 'relaxed';
+    const signalProcessor = new SignalProcessor([...TRADING_PAIRS], { entryMode });
 
     // Initialize Database Service
     const dbPath = process.env.NODE_ENV === 'test' ? ':memory:' : 'data/bot.db';
     this.databaseService = new DatabaseService(dbPath);
 
+    // Initialize DryRunManager if in dry-run mode
+    if (isDryRun) {
+      this.dryRunManager = new DryRunManager({
+        initialBalance: dryRunBalance,
+        slippagePercent: new Decimal(0.0005), // 0.05% slippage
+        dataPath: 'data/dry-run-results.json',
+        riskConfig: riskConfig
+      });
+    }
+
     // Initialize HyperLiquid Client
     const privateKey = process.env.HYPERLIQUID_PRIVATE_KEY;
-    if (!privateKey) {
+    if (!privateKey && !isDryRun) {
       TradingLogger.warn("HYPERLIQUID_PRIVATE_KEY not found in .env. Execution will fail.");
     }
     // Use testnet based on env var, default to true for safety
     const isTestnet = process.env.HYPERLIQUID_TESTNET !== 'false';
     this.client = new HyperLiquidClient(privateKey || "", isTestnet);
 
-    // Initialize Trading Engine with order book components
+    // Initialize Trading Engine with order book components and optional dry-run manager
     this.engine = new TradingEngine(
       this.client,
       signalProcessor,
       riskManager,
       this.orderBookManager,
       this.orderBookAnalyzer,
-      this.databaseService
+      this.databaseService,
+      this.dryRunManager
     );
 
     // Initialize Internal WebSocket Server
@@ -78,7 +110,11 @@ class HyperliquidSuperSignal {
     // Initialize MCP Server
     this.mcpServer = new BotMcpServer(this.engine);
 
-    TradingLogger.info(`Bot ready for ${TRADING_PAIRS.length} pairs (TESTNET: true)`);
+    const modeStr = isDryRun ? 'DRY-RUN' : (isTestnet ? 'TESTNET' : 'MAINNET');
+    TradingLogger.info(`Bot ready for ${TRADING_PAIRS.length} pairs (${modeStr})`, {
+      pairs: TRADING_PAIRS,
+      mode: modeStr
+    });
   }
 
   /**
@@ -98,7 +134,9 @@ class HyperliquidSuperSignal {
       // NEW: Reconcile state with exchange
       try {
         const address = this.client.api.getAddress();
-        TradingLogger.info(`Fetching state for ${address}...`);
+        // Mask address for security - show first 6 and last 4 chars
+        const maskedAddress = `${address.substring(0, 6)}...${address.substring(address.length - 4)}`;
+        TradingLogger.info(`Fetching state for ${maskedAddress}...`);
 
         const [userState, openOrders] = await Promise.all([
           this.client.api.getUserState(address),
@@ -107,7 +145,7 @@ class HyperliquidSuperSignal {
 
         this.engine.reconcilePositions(userState, openOrders);
       } catch (error) {
-        TradingLogger.error(`Failed to reconcile state: ${(error as Error).message}`);
+        TradingLogger.logError(error, "Failed to reconcile state");
         // We don't throw here, allowing bot to start, but with warning
       }
 
@@ -126,6 +164,12 @@ class HyperliquidSuperSignal {
         this.wsServer.broadcast('position_update', { status: 'updated', ...data });
       });
 
+      // Initialize dry-run manager state if in dry-run mode
+      if (this.dryRunManager) {
+        await this.dryRunManager.initialize();
+        this.dryRunManager.startReporting();
+      }
+
       // Log asset mappings
       const mappings = this.client.assetIndex.getAllMappings();
       TradingLogger.info(`Asset mappings loaded: ${mappings.symbolToIndex.size} assets`);
@@ -139,31 +183,11 @@ class HyperliquidSuperSignal {
 
       // Handle Market Data
       this.client.ws.on('l2Book', (book) => {
-        // Update order book with new data
-        this.orderBookManager.updateFromL2Book(book);
-
-        // Get the updated order book
-        const orderBook = this.orderBookManager.getOrderBook(book.coin);
-        if (orderBook) {
-          // Calculate metrics
-          const metrics = this.orderBookAnalyzer.calculateMetrics(orderBook);
-          if (metrics) {
-            // Store metrics
-            this.orderBookMetrics.set(book.coin, metrics);
-
-            // Log key metrics
-            TradingLogger.debug(
-              `L2Book update for ${book.coin}: ` +
-              `spread=${metrics.bidAskSpreadPercentage.toFixed(4)}%, ` +
-              `midPrice=${metrics.midPrice.toFixed(2)}, ` +
-              `bidVol=${metrics.totalBidVolume.toFixed(2)}, ` +
-              `askVol=${metrics.totalAskVolume.toFixed(2)}`
-            );
-          }
-        }
+        // Delegate order book processing to the engine
+        this.engine.updateOrderBook(book);
       });
 
-      this.client.ws.on('candle', (rawCandle: any) => {
+      this.client.ws.on('candle', (rawCandle: { s: string; t: number; o: string; h: string; l: string; c: string; v: string }) => {
         // Parse WS candle into our Candle type
         // HyperLiquid candle format: { s: coin, t: open_time, T: close_time, i: interval, o, h, l, c, v, n }
         const coin = rawCandle.s;
@@ -180,32 +204,8 @@ class HyperliquidSuperSignal {
           volume: new Decimal(rawCandle.v)
         };
 
-        // Check order book data availability before processing signal
-        const orderBook = this.orderBookManager.getOrderBook(coin);
-        if (orderBook) {
-          const metrics = this.orderBookMetrics.get(coin);
-          if (metrics) {
-            // Check if market is thin (avoid trading in thin markets)
-            const isThin = this.orderBookAnalyzer.isThinMarket(orderBook, 1000);
-            if (isThin) {
-              TradingLogger.warn(`Thin market detected for ${coin}, skipping signal processing`);
-              return;
-            }
-
-            // Log order book metrics for signal processing
-            TradingLogger.debug(
-              `Processing signal for ${coin} with order book: ` +
-              `spread=${metrics.bidAskSpreadPercentage.toFixed(4)}%, ` +
-              `midPrice=${metrics.midPrice.toFixed(2)}, ` +
-              `totalVol=${(metrics.totalBidVolume + metrics.totalAskVolume).toFixed(2)}`
-            );
-          }
-        } else {
-          TradingLogger.warn(`No order book data available for ${coin}, signal processing may be suboptimal`);
-        }
-
         this.engine.handleCandle(pair, candle).catch(err => {
-          TradingLogger.error(`Engine Error (${pair}): ${err.message}`);
+          TradingLogger.logError(err, `Engine Error (${pair})`);
         });
 
         // Broadcast candle update
@@ -218,52 +218,97 @@ class HyperliquidSuperSignal {
       });
 
       this.client.ws.on('userFill', (fill) => {
-        TradingLogger.info(`Order Filled: ${fill.coin} ${fill.side} ${fill.sz} @ ${fill.px}`);
+        TradingLogger.info(`Order Filled: ${fill.coin} ${fill.side} ${fill.sz} @ ${fill.px}`, {
+          coin: fill.coin,
+          side: fill.side,
+          size: fill.sz,
+          price: fill.px,
+          closedPnl: fill.closedPnl
+        });
       });
 
-      // Add event listener for order book updates
-      this.orderBookManager.on('orderBookUpdate', (event) => {
-        const metrics = this.orderBookAnalyzer.calculateMetrics(event.orderBook);
-        if (metrics) {
-          this.orderBookMetrics.set(event.coin, metrics);
-          TradingLogger.debug(
-            `Order book updated for ${event.coin}: ` +
-            `spread=${metrics.bidAskSpreadPercentage.toFixed(4)}%, ` +
-            `midPrice=${metrics.midPrice.toFixed(2)}`
-          );
-        }
-      });
+      // Order book updates are now handled within the engine via updateOrderBook
 
       TradingLogger.info("Bot started successfully.");
 
     } catch (error) {
-      TradingLogger.logError(error as Error, "Failed to start bot");
+      TradingLogger.logError(error, "Failed to start bot");
       throw error;
     }
   }
 
   /**
-   * Stop the trading bot
+   * Stop the trading bot gracefully
+   * CRITICAL FIX: Remove all event listeners to prevent memory leaks
    */
   public async stop(): Promise<void> {
-    TradingLogger.info("Stopping Hyperliquid Super Signal Bot...");
+    if (this.isShuttingDown) {
+      TradingLogger.warn('Shutdown already in progress');
+      return;
+    }
+
+    this.isShuttingDown = true;
+    TradingLogger.info("Initiating graceful shutdown...");
+
+    // 1. Stop accepting new signals
     this.isRunning = false;
+    TradingLogger.info('✓ Stopped accepting new signals');
 
-    // Remove event listeners from orderBookManager
-    this.orderBookManager.removeAllListeners('orderBookUpdate');
+    // 2. Wait briefly for any in-flight engine operations to complete (max 30 seconds)
+    // The engine handles its own async operations internally
+    try {
+      await new Promise((resolve, _reject) => {
+        const timeout = setTimeout(() => {
+          TradingLogger.warn('Timeout waiting for operations, proceeding with shutdown');
+          resolve(undefined);
+        }, 30000);
 
-    // Clear order book metrics
-    this.orderBookMetrics.clear();
+        // Allow brief grace period for operations to complete
+        setTimeout(() => {
+          clearTimeout(timeout);
+          resolve(undefined);
+        }, 2000);
+      });
+      TradingLogger.info('✓ In-flight operations completed');
+    } catch {
+      TradingLogger.warn('Error waiting for operations');
+    }
 
-    // Close WebSocket Server
-    this.wsServer.close();
-
-    // Close Database
-    this.databaseService.close();
-
+    // 3. Close WebSocket connections
+    TradingLogger.info('Closing WebSocket connections...');
     this.client.disconnect();
+    TradingLogger.info('✓ WebSocket connections closed');
 
-    TradingLogger.info("Bot stopped");
+    // 4. Close internal WebSocket server
+    TradingLogger.info('Closing internal WebSocket server...');
+    this.wsServer.close();
+    TradingLogger.info('✓ Internal WebSocket server closed');
+
+    // 5. Stop dry-run manager and persist state
+    if (this.dryRunManager) {
+      TradingLogger.info('Saving dry-run state...');
+      await this.dryRunManager.stop();
+      TradingLogger.info('✓ Dry-run state saved');
+    }
+
+    // 6. Stop MCP server (if it has a stop method)
+    if ('stop' in this.mcpServer && typeof this.mcpServer.stop === 'function') {
+      TradingLogger.info('Stopping MCP server...');
+      await this.mcpServer.stop();
+      TradingLogger.info('✓ MCP server stopped');
+    }
+
+    // 7. Close database
+    TradingLogger.info('Closing database...');
+    await this.databaseService.close();
+    TradingLogger.info('✓ Database closed');
+
+    // 8. Allow brief time for final logs to flush
+    TradingLogger.info('Shutdown complete ✓');
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    // CRITICAL FIX: Remove all event listeners to prevent memory leaks
+    this.engine.removeAllListeners();
   }
 
   /**
@@ -289,20 +334,35 @@ class HyperliquidSuperSignal {
 }
 
 // Main execution
-async function main() {
+async function main(): Promise<void> {
   const bot = new HyperliquidSuperSignal();
 
-  // Handle graceful shutdown
-  process.on('SIGINT', async () => {
-    TradingLogger.info("Received SIGINT, shutting down gracefully...");
-    await bot.stop();
-    process.exit(0);
+  // Enhanced graceful shutdown handlers
+  // CRITICAL FIX: Remove process.exit() from shutdown handler to allow proper cleanup
+  const shutdown = async (signal: string): Promise<void> => {
+    TradingLogger.info(`Received ${signal} signal`);
+    try {
+      await bot.stop();
+      TradingLogger.info('Shutdown successful');
+      // CRITICAL FIX: Don't call process.exit() here - let caller handle shutdown
+    } catch (error) {
+      TradingLogger.logError(error, "Shutdown error");
+      // CRITICAL FIX: Don't call process.exit() here - let caller handle shutdown
+    }
+  };
+
+  process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+
+  // Handle uncaught errors
+  process.on('uncaughtException', (error) => {
+    TradingLogger.logError(error, "Uncaught exception");
+    shutdown('uncaughtException').catch(() => process.exit(1));
   });
 
-  process.on('SIGTERM', async () => {
-    TradingLogger.info("Received SIGTERM, shutting down gracefully...");
-    await bot.stop();
-    process.exit(0);
+  process.on('unhandledRejection', (reason) => {
+    TradingLogger.error(`Unhandled rejection: ${String(reason)}`);
+    shutdown('unhandledRejection').catch(() => process.exit(1));
   });
 
   try {
@@ -312,7 +372,7 @@ async function main() {
     TradingLogger.info("Bot is running. Press Ctrl+C to stop.");
 
   } catch (error) {
-    TradingLogger.logError(error as Error, "Bot failed to start");
+    TradingLogger.logError(error, "Bot failed to start");
     process.exit(1);
   }
 }
@@ -325,5 +385,3 @@ if (isMainModule) {
     process.exit(1);
   });
 }
-
-export { HyperliquidSuperSignal };

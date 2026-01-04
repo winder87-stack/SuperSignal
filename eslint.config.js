@@ -27,6 +27,7 @@ export default [
       '@typescript-eslint/no-explicit-any': 'warn',
 
       // General rules
+      'no-unused-vars': 'off', // Use @typescript-eslint/no-unused-vars instead
       'no-console': 'off', // We use console for logging
       'no-undef': 'off', // Node.js globals like process
       'no-redeclare': 'off', // Allow variable redeclaration in different scopes

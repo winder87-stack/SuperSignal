@@ -107,10 +107,10 @@ describe('Order Book Integration with src/index.ts', () => {
             expect(metrics).toBeDefined();
 
             // Store metrics
-            botAny.orderBookMetrics.set('BTC', metrics);
+            botAny.engine.orderBookMetrics.set('BTC', metrics);
 
             // Verify metrics are stored
-            const storedMetrics = botAny.orderBookMetrics.get('BTC');
+            const storedMetrics = botAny.engine.orderBookMetrics.get('BTC');
             expect(storedMetrics).toBeDefined();
             expect(storedMetrics?.bestBidPrice).toBe(100);
             expect(storedMetrics?.bestAskPrice).toBe(102);
@@ -130,17 +130,17 @@ describe('Order Book Integration with src/index.ts', () => {
             botAny.orderBookManager.updateFromL2Book(book1);
             let orderBook = botAny.orderBookManager.getOrderBook('BTC');
             let metrics = botAny.orderBookAnalyzer.calculateMetrics(orderBook);
-            botAny.orderBookMetrics.set('BTC', metrics);
+            botAny.engine.orderBookMetrics.set('BTC', metrics);
 
-            expect(botAny.orderBookMetrics.get('BTC')?.bestBidPrice).toBe(100);
+            expect(botAny.engine.orderBookMetrics.get('BTC')?.bestBidPrice).toBe(100);
 
             // Second update
             botAny.orderBookManager.updateFromL2Book(book2);
             orderBook = botAny.orderBookManager.getOrderBook('BTC');
             metrics = botAny.orderBookAnalyzer.calculateMetrics(orderBook);
-            botAny.orderBookMetrics.set('BTC', metrics);
+            botAny.engine.orderBookMetrics.set('BTC', metrics);
 
-            expect(botAny.orderBookMetrics.get('BTC')?.bestBidPrice).toBe(105);
+            expect(botAny.engine.orderBookMetrics.get('BTC')?.bestBidPrice).toBe(105);
         });
 
         it('should store metrics for multiple coins', () => {
@@ -158,12 +158,12 @@ describe('Order Book Integration with src/index.ts', () => {
             const btcMetrics = botAny.orderBookAnalyzer.calculateMetrics(btcOrderBook);
             const ethMetrics = botAny.orderBookAnalyzer.calculateMetrics(ethOrderBook);
 
-            botAny.orderBookMetrics.set('BTC', btcMetrics);
-            botAny.orderBookMetrics.set('ETH', ethMetrics);
+            botAny.engine.orderBookMetrics.set('BTC', btcMetrics);
+            botAny.engine.orderBookMetrics.set('ETH', ethMetrics);
 
-            expect(botAny.orderBookMetrics.size).toBe(2);
-            expect(botAny.orderBookMetrics.get('BTC')?.bestBidPrice).toBe(100);
-            expect(botAny.orderBookMetrics.get('ETH')?.bestBidPrice).toBe(2000);
+            expect(botAny.engine.orderBookMetrics.size).toBe(2);
+            expect(botAny.engine.orderBookMetrics.get('BTC')?.bestBidPrice).toBe(100);
+            expect(botAny.engine.orderBookMetrics.get('ETH')?.bestBidPrice).toBe(2000);
         });
     });
 
@@ -404,7 +404,7 @@ describe('Order Book Integration with src/index.ts', () => {
             // Update metrics for liquid book
             const liquidOrderBook = botAny.orderBookManager.getOrderBook('BTC');
             const liquidMetrics = botAny.orderBookAnalyzer.calculateMetrics(liquidOrderBook);
-            botAny.orderBookMetrics.set('BTC', liquidMetrics);
+            botAny.engine.orderBookMetrics.set('BTC', liquidMetrics);
             const liquidResult = (bot as any).engine.identifyOptimalEntryExit('BTC', 'buy');
 
             // Low liquidity, wide spread
@@ -418,7 +418,7 @@ describe('Order Book Integration with src/index.ts', () => {
             // Update metrics for thin book
             const thinOrderBook = botAny.orderBookManager.getOrderBook('BTC');
             const thinMetrics = botAny.orderBookAnalyzer.calculateMetrics(thinOrderBook);
-            botAny.orderBookMetrics.set('BTC', thinMetrics);
+            botAny.engine.orderBookMetrics.set('BTC', thinMetrics);
             const thinResult = (bot as any).engine.identifyOptimalEntryExit('BTC', 'buy');
 
             // Liquid market should have higher confidence
@@ -529,9 +529,9 @@ describe('Order Book Integration with src/index.ts', () => {
 
                 botAny.orderBookManager.on('orderBookUpdate', (event: any) => {
                     const metrics = botAny.orderBookAnalyzer.calculateMetrics(event.orderBook);
-                    botAny.orderBookMetrics.set(event.coin, metrics);
+                    botAny.engine.orderBookMetrics.set(event.coin, metrics);
 
-                    const storedMetrics = botAny.orderBookMetrics.get('BTC');
+                    const storedMetrics = botAny.engine.orderBookMetrics.get('BTC');
                     expect(storedMetrics).toBeDefined();
                     expect(storedMetrics?.bestBidPrice).toBe(100);
                     resolve();
